@@ -1,11 +1,108 @@
-# Monad Blitz Hyderbad Submission Process
+# Monad Games
 
-1. Visit the `monad-blitz-hyderabad` repo (link [here](https://github.com/monad-developers/monad-blitz-hyderabad)) and fork it.
+Monad Games is a multi-game Web3 platform built on Monad Testnet with wallet-based gameplay, real-time multiplayer, and on-chain wager settlement.
 
-<img width="1511" alt="Screenshot 2025-07-07 at 10 12 23 AM" src="https://github.com/user-attachments/assets/e8196bd5-90f7-4906-9994-2580f1b4b3ba" />
+## Links
+- Demo: [https://monad-games.vercel.app/](https://monad-games.vercel.app/)
+- GitHub: [https://github.com/Sri-dinesh/Monad-Games](https://github.com/Sri-dinesh/Monad-Games)
 
-2. Give it your project name, a one-liner description, make sure you are forking `main` branch and click `Create Fork`.
+## What It Includes
+- Single-player games:
+  - Mines
+  - Apex (High/Low/Equal)
+- Multiplayer game:
+  - NFT Card Duel (WebSocket real-time battle)
+- Sports:
+  - Cricket betting section (live/current match feed)
+- Staking dashboard:
+  - Stake, withdraw, claim rewards on Monad
 
-<img width="1511" alt="Screenshot 2025-07-07 at 10 11 40 AM" src="https://github.com/user-attachments/assets/0c35b1d6-e8d1-4f8f-a1af-3bcaa476eec6" />
+## On-Chain Transaction Flows
+- Single-player (Mines/Apex):
+  - On loss, stake transfers to admin treasury wallet.
+- Multiplayer NFT Duel:
+  - Player 1 creates on-chain stake.
+  - Player 2 joins with equal stake.
+  - After match, both vote winner.
+  - Winner claims pot from escrow contract.
 
-3. In your fork you can make all the changes you want, add code of your project, create branches, add information to `README.md`, you can change anything and everything.
+## Tech Stack
+- Frontend: Next.js (App Router), React, TypeScript, Tailwind CSS
+- Wallet/Chain: ethers.js, Monad Testnet (chainId `10143`)
+- Smart contracts: Solidity + Hardhat + OpenZeppelin
+- Realtime: WebSocket server using `ws`
+- Sports data: CricAPI (server-side proxy route)
+- Hosting: Vercel (frontend), Render or similar (WebSocket server)
+
+## Project Structure
+- `Monad-Staking-Template/frontend_` -> Next.js app
+- `Monad-Staking-Template/staking-contracts` -> Solidity contracts and deploy scripts
+
+## Prerequisites
+- Node.js `20+`
+- npm
+- Monad testnet funded wallet
+
+## Environment Variables
+Create `Monad-Staking-Template/frontend_/.env.local`:
+
+```env
+CRICAPI_KEY=your_cricapi_key
+NEXT_PUBLIC_ADMIN_TREASURY_ADDRESS=0xyour_admin_wallet
+NEXT_PUBLIC_PVP_WAGER_CONTRACT_ADDRESS=0xyour_pvp_escrow_contract
+
+# Optional (staking page overrides)
+NEXT_PUBLIC_STAKING_CONTRACT_ADDRESS=0x...
+NEXT_PUBLIC_STAKING_TOKEN_ADDRESS=0x...
+NEXT_PUBLIC_REWARD_TOKEN_ADDRESS=0x...
+```
+
+Create `Monad-Staking-Template/staking-contracts/.env`:
+
+```env
+PRIVATE_KEY=0xyour_private_key
+```
+
+## Run Locally
+
+### 1) Contracts
+```bash
+cd Monad-Staking-Template/staking-contracts
+npm install
+npx hardhat compile
+```
+
+Deploy PvP escrow:
+```bash
+npx hardhat run scripts/deploy-pvp-escrow.ts --network monadTestnet
+```
+
+### 2) Frontend
+```bash
+cd ../frontend_
+npm install
+npm run dev
+```
+
+### 3) WebSocket Server (NFT Multiplayer)
+```bash
+npm run ws:nft:public
+```
+
+Open:
+- Frontend: `http://localhost:3000`
+- Games: `http://localhost:3000/games`
+- NFT Duel: `http://localhost:3000/games/nft-card`
+
+## Production Notes
+- If frontend is HTTPS (Vercel), WebSocket must use `wss://` (not `ws://`).
+- Host WebSocket server separately (Render/Railway/Fly/VM) and use its public `wss://` URL.
+
+## Key Pages
+- `/` -> Staking dashboard
+- `/games` -> Games lobby
+- `/games/mines` -> Mines
+- `/games/apex` -> Apex
+- `/games/nft-card` -> NFT multiplayer duel
+- `/sports` -> Sports hub
+- `/sports/cricket` -> Cricket betting

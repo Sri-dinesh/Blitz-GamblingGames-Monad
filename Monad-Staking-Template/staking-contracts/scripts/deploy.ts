@@ -4,11 +4,11 @@ import * as fs from "fs";
 import * as path from "path";
 
 const CONTRACT_NAME = "StakingRewards";
-// const STAKING_TOKEN_ADDRESS = "0x534b2f3A21130d7a60830c2Df862319e593943A3"; // USDC ON MONAD TESTNET 
+// const STAKING_TOKEN_ADDRESS = "0x534b2f3A21130d7a60830c2Df862319e593943A3"; // USDC ON MONAD TESTNET
 // const REWARD_TOKEN_ADDRESS = "0x40D419F6aE98cF4726825f59718dc2cDB4F43bf5"; // Custom Reward Token Address
 
-const REWARD_TOKEN_ADDRESS = "0x40D419F6aE98cF4726825f59718dc2cDB4F43bf5"; // Custom Reward Token Address
-const STAKING_TOKEN_ADDRESS = "0x534b2f3A21130d7a60830c2Df862319e593943A3"; // USDC ON MONAD TESTNET 
+const REWARD_TOKEN_ADDRESS = "0x5CF10a0E32b35eDA7Bfb6c4B873832899885f9fD"; // Custom Reward Token Address
+const STAKING_TOKEN_ADDRESS = "0xF1D0E196fDf6309D335f69d5251FF91D399FcBB3"; // USDC ON MONAD TESTNET
 async function main(): Promise<void> {
   console.log("\nDeploying", CONTRACT_NAME, "...\n");
 
@@ -32,7 +32,10 @@ async function main(): Promise<void> {
 
   console.log("Deploying...");
   const Contract = await hre.ethers.getContractFactory(CONTRACT_NAME);
-  const contract = await Contract.deploy(STAKING_TOKEN_ADDRESS, REWARD_TOKEN_ADDRESS);
+  const contract = await Contract.deploy(
+    STAKING_TOKEN_ADDRESS,
+    REWARD_TOKEN_ADDRESS,
+  );
 
   await contract.waitForDeployment();
   const contractAddress = String(contract.target);

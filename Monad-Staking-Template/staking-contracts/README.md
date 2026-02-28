@@ -5,8 +5,10 @@ This project is a ready-to-use staking template on **Monad Testnet**.
 It includes:
 - `contracts/RewardToken.sol`: sample ERC20 reward token
 - `contracts/StakingContract.sol`: `StakingRewards` staking contract
+- `contracts/PvpWagerEscrow.sol`: multiplayer stake escrow (`create/join/vote winner/claim`)
 - `scripts/step-1-deploy-reward-token.ts`: deploy reward token
 - `scripts/deploy.ts`: deploy staking contract with staking/reward token addresses
+- `scripts/deploy-pvp-escrow.ts`: deploy PVP escrow contract
 
 ## Network
 - Network name: `monadTestnet`
@@ -42,7 +44,7 @@ npx hardhat compile
 ## 4) Deploy reward token
 
 ```bash
-npx hardhat run scripts/step-1-deploy-reward-token.ts --network monadTestnet
+ hardhat run scripts/step-1-deploy-reward-token.ts --network monadTestnet
 ```
 
 Output is saved to:
@@ -90,6 +92,22 @@ Then run frontend:
 cd "../frontend "
 npm install
 npm run dev
+```
+
+## 9) Deploy PVP wager escrow (for NFT multiplayer game)
+
+```bash
+npx hardhat run scripts/deploy-pvp-escrow.ts --network monadTestnet
+```
+
+Output is saved to:
+- `deployed-pvp-escrow.json`
+
+Set frontend env values in `../frontend_/.env.local`:
+
+```env
+NEXT_PUBLIC_PVP_WAGER_CONTRACT_ADDRESS=0x...
+NEXT_PUBLIC_ADMIN_TREASURY_ADDRESS=0x...   # your admin wallet for single-player loss transfers
 ```
 
 ## Main contract functions

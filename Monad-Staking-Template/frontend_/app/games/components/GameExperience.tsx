@@ -3,8 +3,11 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { ethers } from "ethers";
 import { Bomb, EyeOff, Flame, RefreshCcw } from "lucide-react";
 import styles from "../games.module.css";
+import { useToastContext } from "@/app/contexts/ToastContext";
+import { ADMIN_TREASURY_ADDRESS } from "@/app/config/game_betting_config";
 
 type Cell = {
   isMine: boolean;
@@ -24,6 +27,12 @@ type RoundOutcome = {
 
 type GameExperienceProps = {
   game: GameType;
+};
+
+type Eip1193Provider = {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+  on: (event: string, cb: (...args: unknown[]) => void) => void;
+  removeListener: (event: string, cb: (...args: unknown[]) => void) => void;
 };
 
 const GRID_OPTIONS = [4, 5, 6, 7];
@@ -83,7 +92,10 @@ const formatAmount = (value: number) =>
   });
 
 export default function GameExperience({ game }: GameExperienceProps) {
+  const { showError, showSuccess } = useToastContext();
   const [stake, setStake] = useState<number>(DEFAULT_STAKE);
+  const [walletAddress, setWalletAddress] = useState("");
+  const [isLossTransferPending, setIsLossTransferPending] = useState(false);
 
   const [gridSize, setGridSize] = useState<number>(DEFAULT_GRID);
   const [mineCount, setMineCount] = useState<number>(DEFAULT_MINES);
@@ -103,6 +115,8 @@ export default function GameExperience({ game }: GameExperienceProps) {
 
   const [roundOutcome, setRoundOutcome] = useState<RoundOutcome>(null);
   const outcomeIdRef = useRef(1);
+  const ethereum =
+    typeof window !== "undefined" ? ((window as Window & { ethereum?: Eip1193Provider }).ethereum ?? null) : null;
 
   const maxMines = useMemo(() => gridSize * gridSize - 1, [gridSize]);
   const minesMultiplier = useMemo(
@@ -117,6 +131,53 @@ export default function GameExperience({ game }: GameExperienceProps) {
     setRoundOutcome(payload);
   };
 
+  const connectWallet = async () => {
+    if (!ethereum) {
+      showError("Install MetaMask or another EVM wallet.");
+      return;
+    }
+    try {
+      const accounts = (await ethereum.request({ method: "eth_requestAccounts" })) as string[];
+      setWalletAddress(accounts[0] ?? "");
+      if (accounts[0]) showSuccess("Wallet connected.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wallet connection failed.";
+      showError(message);
+    }
+  };
+
+  const transferLossToTreasury = async (label: "MINES" | "APEX") => {
+    if (!ethereum) {
+      showError("Install MetaMask to process stake transfer.");
+      return;
+    }
+    if (!ADMIN_TREASURY_ADDRESS) {
+      showError("Admin treasury address is missing. Set NEXT_PUBLIC_ADMIN_TREASURY_ADDRESS.");
+      return;
+    }
+    if (!ethers.isAddress(ADMIN_TREASURY_ADDRESS)) {
+      showError("Admin treasury address is invalid.");
+      return;
+    }
+    setIsLossTransferPending(true);
+    try {
+      const provider = new ethers.BrowserProvider(ethereum as ethers.Eip1193Provider);
+      const signer = await provider.getSigner();
+      const tx = await signer.sendTransaction({
+        to: ADMIN_TREASURY_ADDRESS,
+        value: ethers.parseEther(stake.toString()),
+        data: ethers.hexlify(ethers.toUtf8Bytes(`SINGLE_${label}_LOSS`)),
+      });
+      await tx.wait();
+      showSuccess(`${label} loss stake transferred to admin wallet.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Loss transfer failed.";
+      showError(message);
+    } finally {
+      setIsLossTransferPending(false);
+    }
+  };
+
   const nextOutcomeId = () => {
     const id = outcomeIdRef.current;
     outcomeIdRef.current += 1;
@@ -128,6 +189,27 @@ export default function GameExperience({ game }: GameExperienceProps) {
     const timer = window.setTimeout(() => setRoundOutcome(null), 2900);
     return () => window.clearTimeout(timer);
   }, [roundOutcome]);
+
+  useEffect(() => {
+    if (!ethereum) return;
+    const load = async () => {
+      try {
+        const accounts = (await ethereum.request({ method: "eth_accounts" })) as string[];
+        setWalletAddress(accounts[0] ?? "");
+      } catch {
+        // noop
+      }
+    };
+    void load();
+    const onAccountsChanged = (accounts: unknown) => {
+      const list = Array.isArray(accounts) ? (accounts as string[]) : [];
+      setWalletAddress(list[0] ?? "");
+    };
+    ethereum.on("accountsChanged", onAccountsChanged);
+    return () => {
+      ethereum.removeListener("accountsChanged", onAccountsChanged);
+    };
+  }, [ethereum]);
 
   const newMinesRound = (nextGrid = gridSize, nextMines = mineCount) => {
     setBoard(buildBoard(nextGrid, nextMines));
@@ -151,6 +233,7 @@ export default function GameExperience({ game }: GameExperienceProps) {
       setBoard(revealed);
       setMinesState("lost");
       setMinesMessage("Boom. Round lost. Start again.");
+      void transferLossToTreasury("MINES");
       openResultModal({
         id: nextOutcomeId(),
         result: "lose",
@@ -220,6 +303,9 @@ export default function GameExperience({ game }: GameExperienceProps) {
         : `Round ended: MISS. You lost ${formatAmount(stake)} MON.`,
     );
     setApexStreak((prev) => (win ? prev + 1 : 0));
+    if (!win) {
+      void transferLossToTreasury("APEX");
+    }
     openResultModal({
       id: nextOutcomeId(),
       result: win ? "win" : "lose",
@@ -273,6 +359,18 @@ export default function GameExperience({ game }: GameExperienceProps) {
         <div className="grid gap-4 lg:grid-cols-[1.2fr_2fr]">
           <aside className={`${styles.glass} space-y-4 rounded-3xl p-5`}>
             <p className={`${styles.muted} text-xs tracking-[0.18em] uppercase`}>Round Setup</p>
+            <button
+              type="button"
+              onClick={connectWallet}
+              className="w-full rounded-xl border border-cyan-300/40 bg-slate-900/70 px-3 py-2 text-left text-xs font-semibold text-cyan-100"
+            >
+              {walletAddress
+                ? `Wallet: ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
+                : "Connect Wallet"}
+            </button>
+            {isLossTransferPending && (
+              <p className="text-xs text-orange-200">Processing loss stake transfer to admin wallet...</p>
+            )}
             <label className="block text-sm text-white">
               Stake (MON)
               <input

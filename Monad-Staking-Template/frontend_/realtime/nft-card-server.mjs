@@ -17,6 +17,8 @@ const safeName = (value) => {
   return trimmed.slice(0, 24);
 };
 
+const safeWallet = (value) => String(value || "").trim().toLowerCase();
+
 const send = (ws, payload) => {
   if (ws.readyState !== ws.OPEN) return;
   ws.send(JSON.stringify(payload));
@@ -33,6 +35,7 @@ const getPublicSession = (session) => ({
   players: session.players.map((player) => ({
     id: player.id,
     name: player.name,
+    walletAddress: player.walletAddress,
     hp: player.hp,
     cardId: player.cardId,
     ready: player.ready,
@@ -128,11 +131,12 @@ const removePlayer = (playerId) => {
   broadcastSession(session);
 };
 
-const handleCreate = (ws, playerId, name) => {
+const handleCreate = (ws, playerId, name, walletAddress) => {
   const sessionId = randomId("ROOM-");
   const player = {
     id: playerId,
     name: safeName(name),
+    walletAddress: safeWallet(walletAddress),
     hp: MAX_HP,
     cardId: null,
     ready: false,
@@ -158,7 +162,7 @@ const handleCreate = (ws, playerId, name) => {
   broadcastSession(session);
 };
 
-const handleJoin = (ws, playerId, sessionId, name) => {
+const handleJoin = (ws, playerId, sessionId, name, walletAddress) => {
   const room = sessions.get(String(sessionId || "").trim());
   if (!room) {
     send(ws, { type: "error", message: "Session not found." });
@@ -172,6 +176,7 @@ const handleJoin = (ws, playerId, sessionId, name) => {
   const newPlayer = {
     id: playerId,
     name: safeName(name),
+    walletAddress: safeWallet(walletAddress),
     hp: MAX_HP,
     cardId: null,
     ready: false,
@@ -273,12 +278,12 @@ wss.on("connection", (ws) => {
     const type = payload?.type;
 
     if (type === "create_session") {
-      handleCreate(ws, playerId, payload.name);
+      handleCreate(ws, playerId, payload.name, payload.walletAddress);
       return;
     }
 
     if (type === "join_session") {
-      handleJoin(ws, playerId, payload.sessionId, payload.name);
+      handleJoin(ws, playerId, payload.sessionId, payload.name, payload.walletAddress);
       return;
     }
 
@@ -305,6 +310,14 @@ wss.on("connection", (ws) => {
       me.ready = false;
       session.lastAction = `${me.name} selected a card`;
       appendLog(session, `${me.name} selected card ${me.cardId || "none"}.`);
+      broadcastSession(session);
+      return;
+    }
+
+    if (type === "set_wallet") {
+      const nextWallet = safeWallet(payload.walletAddress);
+      me.walletAddress = nextWallet;
+      session.lastAction = `${me.name} updated wallet`;
       broadcastSession(session);
       return;
     }

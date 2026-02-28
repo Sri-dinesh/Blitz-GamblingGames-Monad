@@ -2,9 +2,13 @@
 
 import Image, { type StaticImageData } from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { House, RotateCcw, Shield, Sword, Users, Wifi, WifiOff } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { ethers } from "ethers";
+import { House, RotateCcw, Shield, Sword, Users, Wallet, Wifi, WifiOff } from "lucide-react";
 import styles from "../games.module.css";
+import { useToastContext } from "@/app/contexts/ToastContext";
+import { PVP_WAGER_ABI, PVP_WAGER_CONTRACT_ADDRESS } from "@/app/config/game_betting_config";
+import { monadTestnet } from "@/app/config/chains";
 
 import AceImg from "@/assets/Ace.png";
 import BlackSolusImg from "@/assets/Black_Solus.png";
@@ -24,6 +28,12 @@ import LandingBg from "@/assets/background/landing.jpg";
 import PaNightBg from "@/assets/background/panight.jpg";
 import SaimanBg from "@/assets/background/saiman.jpg";
 
+type Eip1193Provider = {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+  on: (event: string, cb: (...args: unknown[]) => void) => void;
+  removeListener: (event: string, cb: (...args: unknown[]) => void) => void;
+};
+
 type CardDef = {
   id: string;
   name: string;
@@ -39,6 +49,7 @@ type BgDef = {
 type SessionPlayer = {
   id: string;
   name: string;
+  walletAddress?: string;
   hp: number;
   cardId: string | null;
   ready: boolean;
@@ -64,6 +75,32 @@ type WsPayload = {
   sessionId?: string;
   you?: string;
   session?: SessionState;
+};
+
+type EscrowState = {
+  exists: boolean;
+  creator: string;
+  opponent: string;
+  stake: string;
+  joined: boolean;
+  finished: boolean;
+  claimed: boolean;
+  winner: string;
+  myVote: string;
+  opponentVote: string;
+};
+
+const EMPTY_ESCROW: EscrowState = {
+  exists: false,
+  creator: "",
+  opponent: "",
+  stake: "0",
+  joined: false,
+  finished: false,
+  claimed: false,
+  winner: "",
+  myVote: "",
+  opponentVote: "",
 };
 
 const CARDS: CardDef[] = [
@@ -100,22 +137,36 @@ const getHpSegments = (hp: number) => {
 };
 
 export default function NftCardGamePage() {
+  const { showError, showInfo, showSuccess } = useToastContext();
+
   const [playerName, setPlayerName] = useState("Player");
   const [joinSessionId, setJoinSessionId] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [wsUrl, setWsUrl] = useState(WS_DEFAULT_URL);
+
+  const [walletAddress, setWalletAddress] = useState("");
+  const [isConnectingWallet, setIsConnectingWallet] = useState(false);
 
   const [connected, setConnected] = useState(false);
   const [myPlayerId, setMyPlayerId] = useState("");
   const [session, setSession] = useState<SessionState | null>(null);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [selectedBgId, setSelectedBgId] = useState<string>(BACKGROUNDS[0].id);
-  const [statusText, setStatusText] = useState("Connect to WebSocket server to begin.");
+  const [statusText, setStatusText] = useState("Connect wallet + WebSocket to begin.");
   const [resultOpen, setResultOpen] = useState(false);
   const [resultSeed, setResultSeed] = useState(1);
 
+  const [pvpStake, setPvpStake] = useState("0.05");
+  const [escrow, setEscrow] = useState<EscrowState>(EMPTY_ESCROW);
+  const [escrowBusy, setEscrowBusy] = useState("");
+  const [contractReady, setContractReady] = useState(false);
+  const [contractStatusText, setContractStatusText] = useState("");
+
   const socketRef = useRef<WebSocket | null>(null);
   const lastEndedTurnRef = useRef<number | null>(null);
+
+  const ethereum =
+    typeof window !== "undefined" ? ((window as Window & { ethereum?: Eip1193Provider }).ethereum ?? null) : null;
 
   const myPlayer = useMemo(
     () => session?.players.find((player) => player.id === myPlayerId) ?? null,
@@ -127,6 +178,12 @@ export default function NftCardGamePage() {
     [session, myPlayerId],
   );
 
+  const myWalletInSession = (myPlayer?.walletAddress || "").toLowerCase();
+  const opponentWalletInSession = (opponent?.walletAddress || "").toLowerCase();
+  const normalizedWallet = walletAddress.toLowerCase();
+
+  const matchId = useMemo(() => (session?.id ? ethers.id(session.id) : ""), [session?.id]);
+
   const isBattleMode = session?.status === "active" || session?.status === "ended";
 
   const activeBackground = useMemo(() => {
@@ -134,21 +191,255 @@ export default function NftCardGamePage() {
     return source.image.src;
   }, [myPlayer?.backgroundId, selectedBgId]);
 
+  const escrowReady = escrow.exists && escrow.joined && !escrow.claimed;
   const canAct =
     !!session &&
     session.status === "active" &&
     session.currentTurnPlayerId === myPlayerId &&
     !!myPlayer &&
-    !!opponent;
-  const canSendAction = !!session && session.status === "active" && !!myPlayer && !!opponent;
+    !!opponent &&
+    escrowReady;
+
+  const canSendAction =
+    !!session && session.status === "active" && !!myPlayer && !!opponent && escrowReady;
+
   const confettiPieces = useMemo(() => Array.from({ length: 30 }, (_, idx) => idx), []);
   const blastSparks = useMemo(() => Array.from({ length: 14 }, (_, idx) => idx), []);
 
   const myCard = myPlayer?.cardId ? cardById.get(myPlayer.cardId) : null;
   const opponentCard = opponent?.cardId ? cardById.get(opponent.cardId) : null;
   const winnerName = session?.players.find((player) => player.id === session.winnerId)?.name;
-  const didIWin = !!session && session.status === "ended" && session.winnerId === myPlayerId;
-  const didILose = !!session && session.status === "ended" && !!session.winnerId && session.winnerId !== myPlayerId;
+  const winnerWallet =
+    (session?.players.find((player) => player.id === session.winnerId)?.walletAddress || "").toLowerCase();
+  const didIWin = !!session && session.status === "ended" && winnerWallet !== "" && winnerWallet === normalizedWallet;
+  const didILose = !!session && session.status === "ended" && winnerWallet !== "" && winnerWallet !== normalizedWallet;
+
+  const sendEvent = useCallback((payload: Record<string, unknown>) => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify(payload));
+  }, []);
+
+  const getEscrowContract = useCallback(async () => {
+    if (!ethereum) {
+      throw new Error("Install MetaMask or another EVM wallet.");
+    }
+    if (!PVP_WAGER_CONTRACT_ADDRESS || !ethers.isAddress(PVP_WAGER_CONTRACT_ADDRESS)) {
+      throw new Error("Set NEXT_PUBLIC_PVP_WAGER_CONTRACT_ADDRESS with deployed escrow contract address.");
+    }
+
+    const provider = new ethers.BrowserProvider(ethereum as ethers.Eip1193Provider);
+    const network = await provider.getNetwork();
+    if (Number(network.chainId) !== monadTestnet.id) {
+      const chainHex = `0x${monadTestnet.id.toString(16)}`;
+      try {
+        await ethereum.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: chainHex }],
+        });
+      } catch (switchError) {
+        const err = switchError as { code?: number };
+        if (err.code === 4902) {
+          await ethereum.request({
+            method: "wallet_addEthereumChain",
+            params: [
+              {
+                chainId: chainHex,
+                chainName: monadTestnet.name,
+                nativeCurrency: monadTestnet.nativeCurrency,
+                rpcUrls: monadTestnet.rpcUrls.default.http,
+                blockExplorerUrls: [monadTestnet.blockExplorers?.default.url ?? "https://testnet.monadvision.com"],
+              },
+            ],
+          });
+        } else {
+          throw new Error(`Please switch wallet to ${monadTestnet.name} (${monadTestnet.id}).`);
+        }
+      }
+    }
+
+    const signer = await provider.getSigner();
+    return new ethers.Contract(PVP_WAGER_CONTRACT_ADDRESS, PVP_WAGER_ABI, signer);
+  }, [ethereum]);
+
+  const checkContractReady = useCallback(async () => {
+    if (!ethereum) {
+      setContractReady(false);
+      setContractStatusText("Wallet provider not detected.");
+      return;
+    }
+    if (!PVP_WAGER_CONTRACT_ADDRESS || !ethers.isAddress(PVP_WAGER_CONTRACT_ADDRESS)) {
+      setContractReady(false);
+      setContractStatusText("Missing NEXT_PUBLIC_PVP_WAGER_CONTRACT_ADDRESS.");
+      return;
+    }
+
+    try {
+      const provider = new ethers.BrowserProvider(ethereum as ethers.Eip1193Provider);
+      const code = await provider.getCode(PVP_WAGER_CONTRACT_ADDRESS);
+      if (!code || code === "0x") {
+        setContractReady(false);
+        setContractStatusText("Escrow contract not found at configured address.");
+        return;
+      }
+      setContractReady(true);
+      setContractStatusText("Escrow contract detected.");
+    } catch {
+      setContractReady(false);
+      setContractStatusText("Unable to verify escrow contract on current network.");
+    }
+  }, [ethereum]);
+
+  const refreshEscrowState = useCallback(async () => {
+    if (!matchId || !walletAddress || !opponentWalletInSession) {
+      setEscrow(EMPTY_ESCROW);
+      return;
+    }
+
+    try {
+      const contract = await getEscrowContract();
+      const [creator, contractOpponent, stake, joined, finished, claimed, winner] = await contract.getMatch(matchId);
+      const myVote = await contract.winnerVotes(matchId, walletAddress);
+      const opponentVote = await contract.winnerVotes(matchId, opponentWalletInSession);
+
+      setEscrow({
+        exists: true,
+        creator: String(creator).toLowerCase(),
+        opponent: String(contractOpponent).toLowerCase(),
+        stake: ethers.formatEther(stake),
+        joined: Boolean(joined),
+        finished: Boolean(finished),
+        claimed: Boolean(claimed),
+        winner: String(winner).toLowerCase(),
+        myVote: String(myVote).toLowerCase(),
+        opponentVote: String(opponentVote).toLowerCase(),
+      });
+    } catch {
+      setEscrow(EMPTY_ESCROW);
+    }
+  }, [getEscrowContract, matchId, opponentWalletInSession, walletAddress]);
+
+  const connectWallet = useCallback(async () => {
+    if (!ethereum) {
+      showError("Install MetaMask or another EVM wallet.");
+      return;
+    }
+    setIsConnectingWallet(true);
+    try {
+      const accounts = (await ethereum.request({ method: "eth_requestAccounts" })) as string[];
+      const next = accounts[0] ?? "";
+      setWalletAddress(next);
+      if (next) {
+        showSuccess("Wallet connected.");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wallet connection failed.";
+      showError(message);
+    } finally {
+      setIsConnectingWallet(false);
+    }
+  }, [ethereum, showError, showSuccess]);
+
+  const createEscrow = async () => {
+    if (!session || !matchId || !myPlayer || !opponent) {
+      showError("Create/join a websocket session first.");
+      return;
+    }
+    if (!walletAddress) {
+      showInfo("Connect wallet first.");
+      return;
+    }
+    if (!opponentWalletInSession || !ethers.isAddress(opponentWalletInSession)) {
+      showError("Opponent wallet is missing. Ask opponent to connect wallet.");
+      return;
+    }
+    if (myWalletInSession !== normalizedWallet) {
+      showError("Your connected wallet does not match session wallet.");
+      return;
+    }
+
+    setEscrowBusy("create");
+    try {
+      const contract = await getEscrowContract();
+      const value = ethers.parseEther((Number(pvpStake) || 0).toString());
+      if (value <= 0n) throw new Error("Stake must be greater than 0.");
+      const tx = await contract.createMatch(matchId, opponentWalletInSession, { value });
+      await tx.wait();
+      showSuccess("On-chain match created. Opponent must join with same stake.");
+      await refreshEscrowState();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Create stake failed.";
+      showError(message);
+    } finally {
+      setEscrowBusy("");
+    }
+  };
+
+  const joinEscrow = async () => {
+    if (!session || !matchId || !walletAddress) {
+      showError("Connect wallet and session first.");
+      return;
+    }
+
+    setEscrowBusy("join");
+    try {
+      const contract = await getEscrowContract();
+      const effectiveStake = Number(escrow.stake) > 0 ? Number(escrow.stake) : Number(pvpStake);
+      const value = ethers.parseEther(effectiveStake.toString());
+      if (value <= 0n) throw new Error("Stake must be greater than 0.");
+      const tx = await contract.joinMatch(matchId, { value });
+      await tx.wait();
+      showSuccess("Joined on-chain match stake.");
+      await refreshEscrowState();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Join stake failed.";
+      showError(message);
+    } finally {
+      setEscrowBusy("");
+    }
+  };
+
+  const voteWinner = async () => {
+    if (!session || session.status !== "ended" || !session.winnerId) {
+      showInfo("Match winner is not available yet.");
+      return;
+    }
+    if (!matchId || !winnerWallet || !ethers.isAddress(winnerWallet)) {
+      showError("Winner wallet is missing.");
+      return;
+    }
+
+    setEscrowBusy("vote");
+    try {
+      const contract = await getEscrowContract();
+      const tx = await contract.voteWinner(matchId, winnerWallet);
+      await tx.wait();
+      showSuccess("Winner vote submitted on-chain.");
+      await refreshEscrowState();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Vote winner failed.";
+      showError(message);
+    } finally {
+      setEscrowBusy("");
+    }
+  };
+
+  const claimPot = async () => {
+    if (!matchId) return;
+    setEscrowBusy("claim");
+    try {
+      const contract = await getEscrowContract();
+      const tx = await contract.claimPot(matchId);
+      await tx.wait();
+      showSuccess("Pot claimed successfully.");
+      await refreshEscrowState();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Claim pot failed.";
+      showError(message);
+    } finally {
+      setEscrowBusy("");
+    }
+  };
 
   useEffect(() => {
     return () => {
@@ -156,11 +447,42 @@ export default function NftCardGamePage() {
     };
   }, []);
 
-  const sendEvent = (payload: Record<string, unknown>) => {
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify(payload));
-  };
+  useEffect(() => {
+    if (!ethereum) return;
+    const load = async () => {
+      try {
+        const accounts = (await ethereum.request({ method: "eth_accounts" })) as string[];
+        setWalletAddress(accounts[0] ?? "");
+      } catch {
+        // noop
+      }
+    };
+    void load();
+
+    const onAccountsChanged = (accounts: unknown) => {
+      const list = Array.isArray(accounts) ? (accounts as string[]) : [];
+      setWalletAddress(list[0] ?? "");
+    };
+    ethereum.on("accountsChanged", onAccountsChanged);
+    return () => {
+      ethereum.removeListener("accountsChanged", onAccountsChanged);
+    };
+  }, [ethereum]);
+
+  useEffect(() => {
+    if (!session || !walletAddress) return;
+    if (myWalletInSession === normalizedWallet) return;
+    sendEvent({ type: "set_wallet", walletAddress: normalizedWallet });
+  }, [myWalletInSession, normalizedWallet, sendEvent, session, walletAddress]);
+
+  useEffect(() => {
+    if (!session || !walletAddress || !matchId) return;
+    void refreshEscrowState();
+  }, [matchId, refreshEscrowState, session, walletAddress]);
+
+  useEffect(() => {
+    void checkContractReady();
+  }, [checkContractReady, walletAddress]);
 
   const connectSocket = () => {
     socketRef.current?.close();
@@ -229,11 +551,32 @@ export default function NftCardGamePage() {
   };
 
   const createSession = () => {
-    sendEvent({ type: "create_session", name: playerName });
+    if (!walletAddress) {
+      showInfo("Connect wallet first for multiplayer stake flow.");
+      return;
+    }
+    if (!contractReady) {
+      showError("Escrow contract is not configured/deployed correctly.");
+      return;
+    }
+    sendEvent({ type: "create_session", name: playerName, walletAddress: normalizedWallet });
   };
 
   const joinSession = () => {
-    sendEvent({ type: "join_session", name: playerName, sessionId: joinSessionId });
+    if (!walletAddress) {
+      showInfo("Connect wallet first for multiplayer stake flow.");
+      return;
+    }
+    if (!contractReady) {
+      showError("Escrow contract is not configured/deployed correctly.");
+      return;
+    }
+    sendEvent({
+      type: "join_session",
+      name: playerName,
+      sessionId: joinSessionId,
+      walletAddress: normalizedWallet,
+    });
   };
 
   const selectCard = (cardId: string) => {
@@ -247,10 +590,18 @@ export default function NftCardGamePage() {
   };
 
   const readyUp = () => {
+    if (!escrowReady) {
+      showInfo("Both players must lock stake on-chain before ready.");
+      return;
+    }
     sendEvent({ type: "player_ready" });
   };
 
   const playAction = (action: "attack" | "defend") => {
+    if (!escrowReady) {
+      showInfo("Escrow not funded by both players yet.");
+      return;
+    }
     sendEvent({ type: "action", action });
   };
 
@@ -268,6 +619,9 @@ export default function NftCardGamePage() {
         <div className="mb-2 text-center">
           <p className="text-xs font-bold tracking-[0.16em] uppercase text-cyan-100">{isOpponent ? "Opponent" : "You"}</p>
           <p className="text-sm font-semibold text-white">{player?.name ?? "Waiting..."}</p>
+          <p className="text-[11px] text-cyan-200">
+            {player?.walletAddress ? `${player.walletAddress.slice(0, 6)}...${player.walletAddress.slice(-4)}` : "Wallet not linked"}
+          </p>
         </div>
 
         <div className={styles.hpRail}>
@@ -303,7 +657,7 @@ export default function NftCardGamePage() {
             Session {session?.id}
           </div>
           <div className="inline-flex items-center gap-2 rounded-full border border-cyan-200/25 bg-slate-950/70 px-3 py-1 text-xs text-cyan-100">
-            Turn {session?.turn ?? 0}
+            Stake {escrow.stake || pvpStake} MON
           </div>
           <Link
             href="/games/nft-card"
@@ -315,11 +669,13 @@ export default function NftCardGamePage() {
         </div>
 
         <div className={styles.battleMiddleStatus}>
-          {session?.status === "active"
-            ? canAct
-              ? "Your turn"
-              : `${opponent?.name || "Opponent"}'s turn • You can prepare defense next turn`
-            : `Match Ended • Winner: ${winnerName || "Unknown"}`}
+          {!escrowReady
+            ? "Waiting for both on-chain stakes"
+            : session?.status === "active"
+              ? canAct
+                ? "Your turn"
+                : `${opponent?.name || "Opponent"}'s turn`
+              : `Match Ended • Winner: ${winnerName || "Unknown"}`}
         </div>
 
         <div className={styles.arenaUpper}>{renderPlayerCard(opponent, opponentCard ?? null, true)}</div>
@@ -346,14 +702,32 @@ export default function NftCardGamePage() {
         </button>
 
         {session?.status === "ended" && (
-          <button
-            type="button"
-            onClick={restartMatch}
-            className="absolute bottom-6 left-1/2 z-30 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-lime-200/40 bg-lime-300/25 px-5 py-2 text-sm font-semibold text-lime-100"
-          >
-            <RotateCcw className="h-4 w-4" />
-            Restart Lobby
-          </button>
+          <div className="absolute bottom-6 left-1/2 z-30 flex -translate-x-1/2 flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={voteWinner}
+              disabled={escrowBusy !== "" || !winnerWallet}
+              className="rounded-full border border-cyan-200/40 bg-cyan-300/20 px-4 py-2 text-xs font-semibold tracking-[0.1em] text-cyan-100 uppercase disabled:opacity-50"
+            >
+              {escrowBusy === "vote" ? "Voting..." : "Vote Winner"}
+            </button>
+            <button
+              type="button"
+              onClick={claimPot}
+              disabled={escrowBusy !== "" || !didIWin || !escrow.finished || escrow.claimed}
+              className="rounded-full border border-lime-200/40 bg-lime-300/25 px-4 py-2 text-xs font-semibold tracking-[0.1em] text-lime-100 uppercase disabled:opacity-50"
+            >
+              {escrowBusy === "claim" ? "Claiming..." : "Claim Pot"}
+            </button>
+            <button
+              type="button"
+              onClick={restartMatch}
+              className="inline-flex items-center gap-2 rounded-full border border-lime-200/40 bg-lime-300/25 px-5 py-2 text-sm font-semibold text-lime-100"
+            >
+              <RotateCcw className="h-4 w-4" />
+              Restart Lobby
+            </button>
+          </div>
         )}
 
         {resultOpen && session?.status === "ended" && (
@@ -414,9 +788,9 @@ export default function NftCardGamePage() {
                 </h3>
                 <p className="mt-2 text-sm text-cyan-100">
                   {didIWin
-                    ? "Excellent play. You dominated this duel."
+                    ? "Excellent play. Submit winner vote and claim your on-chain pot."
                     : didILose
-                      ? "Tough round. Reset and try a new strategy."
+                      ? "Tough round. Confirm winner vote for settlement."
                       : `Winner: ${winnerName || "Unknown"}`}
                 </p>
 
@@ -430,11 +804,19 @@ export default function NftCardGamePage() {
                   </button>
                   <button
                     type="button"
-                    onClick={restartMatch}
-                    className="inline-flex items-center gap-2 rounded-xl bg-lime-300/20 px-4 py-2 text-sm font-semibold text-lime-100 ring-1 ring-lime-200/50"
+                    onClick={voteWinner}
+                    disabled={escrowBusy !== "" || !winnerWallet}
+                    className="rounded-xl bg-cyan-300/20 px-4 py-2 text-sm font-semibold text-cyan-100 ring-1 ring-cyan-200/50 disabled:opacity-50"
                   >
-                    <RotateCcw className="h-4 w-4" />
-                    Play Again
+                    Vote Winner
+                  </button>
+                  <button
+                    type="button"
+                    onClick={claimPot}
+                    disabled={escrowBusy !== "" || !didIWin || !escrow.finished || escrow.claimed}
+                    className="inline-flex items-center gap-2 rounded-xl bg-lime-300/20 px-4 py-2 text-sm font-semibold text-lime-100 ring-1 ring-lime-200/50 disabled:opacity-50"
+                  >
+                    Claim Pot
                   </button>
                 </div>
               </div>
@@ -466,6 +848,10 @@ export default function NftCardGamePage() {
 
         <div className={styles.logDock}>
           <p className="text-[10px] font-semibold tracking-[0.18em] uppercase text-cyan-100">Live Log</p>
+          <p className="mt-1 text-[10px] text-cyan-200">
+            Escrow {escrow.exists ? `stake ${escrow.stake} MON` : "not created"} • Votes {escrow.myVote ? "yes" : "no"}/
+            {escrow.opponentVote ? "yes" : "no"}
+          </p>
           <div className="mt-2 max-h-28 space-y-1 overflow-y-auto text-xs text-slate-200">
             {(session?.log ?? []).slice(-7).map((line, idx) => (
               <p key={`${line}-${idx}`}>• {line}</p>
@@ -485,8 +871,7 @@ export default function NftCardGamePage() {
               <p className={`${styles.muted} text-xs tracking-[0.22em] uppercase`}>Blitz Arcade</p>
               <h1 className={`${styles.title} mt-2 text-3xl font-black sm:text-5xl`}>NFT Card Duel Lobby</h1>
               <p className={`${styles.muted} mt-3 max-w-3xl text-sm sm:text-base`}>
-                Create or join a session, choose one NFT card, and press ready. Match switches to fullscreen arena
-                automatically when both players are ready.
+                Connect wallet, create/join session, lock on-chain stake, then ready up for battle.
               </p>
             </div>
             <Link
@@ -507,6 +892,16 @@ export default function NftCardGamePage() {
                 {connected ? "Connected" : "Offline"}
               </div>
             </div>
+
+            <button
+              type="button"
+              onClick={connectWallet}
+              disabled={isConnectingWallet}
+              className="inline-flex w-full items-center gap-2 rounded-xl border border-cyan-300/35 bg-slate-900/70 px-3 py-2 text-xs font-semibold text-cyan-100"
+            >
+              <Wallet className="h-4 w-4" />
+              {walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : "Connect Wallet"}
+            </button>
 
             <label className="block text-sm text-white">
               WebSocket URL
@@ -538,7 +933,7 @@ export default function NftCardGamePage() {
               <button
                 type="button"
                 onClick={createSession}
-                disabled={!connected}
+                disabled={!connected || !walletAddress}
                 className="rounded-xl bg-lime-300/20 px-4 py-2 text-sm font-semibold text-lime-100 ring-1 ring-lime-200/50 disabled:opacity-40"
               >
                 Create Session
@@ -546,7 +941,7 @@ export default function NftCardGamePage() {
               <button
                 type="button"
                 onClick={joinSession}
-                disabled={!connected || !joinSessionId.trim()}
+                disabled={!connected || !walletAddress || !joinSessionId.trim()}
                 className="rounded-xl bg-orange-300/20 px-4 py-2 text-sm font-semibold text-orange-100 ring-1 ring-orange-200/50 disabled:opacity-40"
               >
                 Join Session
@@ -563,19 +958,54 @@ export default function NftCardGamePage() {
               />
             </label>
 
+            <label className="block text-sm text-white">
+              Stake (MON)
+              <input
+                value={pvpStake}
+                onChange={(event) => setPvpStake(event.target.value)}
+                type="number"
+                min="0.01"
+                step="0.01"
+                className="mt-2 w-full rounded-xl border border-cyan-300/30 bg-slate-900/70 px-3 py-2 text-sm text-white outline-none focus:border-lime-300/60"
+              />
+            </label>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={createEscrow}
+                disabled={!session || escrowBusy !== ""}
+                className="rounded-xl bg-cyan-300/20 px-4 py-2 text-xs font-semibold tracking-[0.1em] text-cyan-100 uppercase disabled:opacity-50"
+              >
+                {escrowBusy === "create" ? "Creating..." : "Create On-chain Stake"}
+              </button>
+              <button
+                type="button"
+                onClick={joinEscrow}
+                disabled={!session || escrowBusy !== ""}
+                className="rounded-xl bg-purple-300/20 px-4 py-2 text-xs font-semibold tracking-[0.1em] text-purple-100 uppercase disabled:opacity-50"
+              >
+                {escrowBusy === "join" ? "Joining..." : "Join On-chain Stake"}
+              </button>
+            </div>
+
             <div className={`${styles.chip} rounded-xl px-3 py-3 text-xs`}>
               <p className="font-semibold text-cyan-100">Status</p>
               <p className={`${styles.muted} mt-1`}>{statusText}</p>
               {sessionId && (
                 <p className="mt-2 font-semibold text-lime-200">
-                  Current Session: <span className="tracking-wider">{sessionId}</span>
+                  Session: <span className="tracking-wider">{sessionId}</span>
                 </p>
               )}
+              <p className="mt-1 text-cyan-100">Contract: {contractStatusText || "Checking..."}</p>
+              <p className="mt-1 text-cyan-100">
+                Escrow: {escrow.exists ? (escrow.joined ? "Funded by both" : "Waiting opponent stake") : "Not created"}
+              </p>
             </div>
           </aside>
 
           <main className={`${styles.glass} rounded-3xl p-5`}>
-            <p className="text-xs font-semibold tracking-[0.14em] uppercase text-cyan-100">Ready Check</p>
+            <p className="text-xs font-semibold tracking-[0.14em] uppercase text-cyan-100">Ready Check + Wallet Check</p>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               {[myPlayer, opponent].map((player, idx) => {
                 const isMe = idx === 0;
@@ -586,6 +1016,7 @@ export default function NftCardGamePage() {
                       {isMe ? "You" : "Opponent"}
                     </p>
                     <p className="mt-1 text-sm text-white">{player?.name ?? "Waiting..."}</p>
+                    <p className="mt-1 text-xs text-cyan-100">Wallet: {player?.walletAddress || "Not linked"}</p>
                     <p className="mt-1 text-xs text-cyan-100">Card: {card?.name || "Not selected"}</p>
                     <p className="mt-1 text-xs text-cyan-100">Ready: {player?.ready ? "Yes" : "No"}</p>
                   </div>

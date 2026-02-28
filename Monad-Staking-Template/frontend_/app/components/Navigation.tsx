@@ -20,6 +20,12 @@ export function Navigation() {
             Staking
           </Link>
           <Link
+            href="/sports"
+            className="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:border-zinc-500 hover:text-white"
+          >
+            Sports
+          </Link>
+          <Link
             href="/games"
             className="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:border-zinc-500 hover:text-white"
           >

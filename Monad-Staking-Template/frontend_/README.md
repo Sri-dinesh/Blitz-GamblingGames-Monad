@@ -26,6 +26,27 @@ npm install
 npm run dev
 ```
 
+## Cricket API Setup
+Cricket sportsbook uses CricAPI via a server route.
+
+Create `.env.local`:
+```bash
+CRICAPI_KEY=your_cricapi_key
+NEXT_PUBLIC_ADMIN_TREASURY_ADDRESS=0xyour_admin_wallet
+NEXT_PUBLIC_PVP_WAGER_CONTRACT_ADDRESS=0xyour_pvp_escrow_contract
+```
+
+Without this key, `/sports/cricket` will render but live match list will stay empty with an error hint.
+
+## Game Transactions
+- Single-player (`/games/mines`, `/games/apex`):
+  - On loss, stake amount is transferred from player wallet to `NEXT_PUBLIC_ADMIN_TREASURY_ADDRESS`.
+- Multiplayer NFT (`/games/nft-card`):
+  - Both players connect wallet.
+  - Creator creates on-chain stake, opponent joins with same stake.
+  - After match result, both vote winner on-chain.
+  - Winner claims total pot from escrow contract.
+
 ## Main Files
 - `app/page.tsx`: staking dashboard UI + contract interactions
 - `app/config/chains.ts`: Monad network config

@@ -1,12 +1,35 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Britti Sans";
+  src:
+    local("Britti Sans"),
+    local("Britti Sans Regular"),
+    url("/fonts/BrittiSans-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Britti Sans";
+  src:
+    local("Britti Sans Bold"),
+    url("/fonts/BrittiSans-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  --background: #000000;
+  --background: #0e091c;
   --foreground: #ffffff;
-  --monad-purple: #876dff;
-  --card-bg: #121212;
-  --card-border: #262626;
-  --muted: #a1a1aa;
+  --monad-purple: #6e54ff;
+  --card-bg: #0e091c;
+  --card-border: #ddd7fe44;
+  --muted: #ddd7fe;
+  --font-body: var(--font-inter), "Inter", sans-serif;
+  --font-heading: "Britti Sans", var(--font-inter), "Inter", sans-serif;
 }
 
 @theme {
@@ -34,12 +57,31 @@ body {
   color: var(--foreground);
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   overflow-x: hidden;
-  font-family: var(--font-mono), 'JetBrains Mono', monospace;
+  font-family: var(--font-body);
 }
 
-/* Apply mono font everywhere */
-* {
-  font-family: var(--font-mono), 'JetBrains Mono', monospace;
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.font-heading {
+  font-family: var(--font-heading);
+  letter-spacing: 0.01em;
+}
+
+p,
+span,
+button,
+input,
+textarea,
+select,
+label,
+a,
+li,
+small {
+  font-family: var(--font-body);
 }
 
 /* Animation utilities */
@@ -135,15 +177,15 @@ body {
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(135, 109, 255, 0.3);
+  background: rgba(110, 84, 255, 0.45);
   border-radius: 10px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(135, 109, 255, 0.5);
+  background: rgba(110, 84, 255, 0.72);
 }
 
 .custom-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: rgba(135, 109, 255, 0.3) rgba(255, 255, 255, 0.05);
+  scrollbar-color: rgba(110, 84, 255, 0.45) rgba(255, 255, 255, 0.05);
 }

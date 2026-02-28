@@ -1,18 +1,12 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
-import { FontLoader } from "./components/FontLoader";
 import { Navigation } from "./components/Navigation";
 
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
-});
-
-const mono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-mono",
 });
 
 export const metadata: Metadata = {
@@ -32,14 +26,13 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body
         className={`
-          ${inter.variable} ${mono.variable} font-mono antialiased
+          ${inter.variable} antialiased
           bg-background text-white
-          selection:bg-monad-purple/30 selection:text-monad-purple
+          selection:bg-monad-purple/30 selection:text-white
           min-h-screen relative overflow-x-hidden
         `}
       >
         <Providers>
-          <FontLoader />
           <Navigation />
           <div className="fixed inset-0 -z-10 h-full w-full bg-background">
             <div className="pointer-events-none absolute left-1/2 top-0 h-[500px] w-full -translate-x-1/2 rounded-full bg-monad-purple/5 blur-[120px]" />

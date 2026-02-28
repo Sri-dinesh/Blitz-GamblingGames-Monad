@@ -8,6 +8,7 @@ const MAX_HP = 100;
 const sessions = new Map();
 const playerToSession = new Map();
 const sockets = new Map();
+const walletByPlayer = new Map();
 
 const randomId = (prefix = "") => `${prefix}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 
@@ -133,10 +134,11 @@ const removePlayer = (playerId) => {
 
 const handleCreate = (ws, playerId, name, walletAddress) => {
   const sessionId = randomId("ROOM-");
+  const resolvedWallet = safeWallet(walletAddress || walletByPlayer.get(playerId) || "");
   const player = {
     id: playerId,
     name: safeName(name),
-    walletAddress: safeWallet(walletAddress),
+    walletAddress: resolvedWallet,
     hp: MAX_HP,
     cardId: null,
     ready: false,
@@ -173,10 +175,11 @@ const handleJoin = (ws, playerId, sessionId, name, walletAddress) => {
     return;
   }
 
+  const resolvedWallet = safeWallet(walletAddress || walletByPlayer.get(playerId) || "");
   const newPlayer = {
     id: playerId,
     name: safeName(name),
-    walletAddress: safeWallet(walletAddress),
+    walletAddress: resolvedWallet,
     hp: MAX_HP,
     cardId: null,
     ready: false,
@@ -264,6 +267,7 @@ const wss = new WebSocketServer({ host: HOST, port: PORT });
 wss.on("connection", (ws) => {
   const playerId = randomId("P-");
   sockets.set(playerId, ws);
+  walletByPlayer.set(playerId, "");
   send(ws, { type: "connected", you: playerId });
 
   ws.on("message", (raw) => {
@@ -284,6 +288,26 @@ wss.on("connection", (ws) => {
 
     if (type === "join_session") {
       handleJoin(ws, playerId, payload.sessionId, payload.name, payload.walletAddress);
+      return;
+    }
+
+    if (type === "set_wallet") {
+      const nextWallet = safeWallet(payload.walletAddress);
+      walletByPlayer.set(playerId, nextWallet);
+
+      const playerSessionId = playerToSession.get(playerId);
+      const playerSession = playerSessionId ? sessions.get(playerSessionId) : null;
+      if (playerSession) {
+        const me = playerSession.players.find((player) => player.id === playerId);
+        if (me) {
+          me.walletAddress = nextWallet;
+          playerSession.lastAction = `${me.name} updated wallet`;
+          broadcastSession(playerSession);
+          return;
+        }
+      }
+
+      send(ws, { type: "wallet_synced", walletAddress: nextWallet });
       return;
     }
 
@@ -310,14 +334,6 @@ wss.on("connection", (ws) => {
       me.ready = false;
       session.lastAction = `${me.name} selected a card`;
       appendLog(session, `${me.name} selected card ${me.cardId || "none"}.`);
-      broadcastSession(session);
-      return;
-    }
-
-    if (type === "set_wallet") {
-      const nextWallet = safeWallet(payload.walletAddress);
-      me.walletAddress = nextWallet;
-      session.lastAction = `${me.name} updated wallet`;
       broadcastSession(session);
       return;
     }
@@ -376,6 +392,7 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     sockets.delete(playerId);
+    walletByPlayer.delete(playerId);
     removePlayer(playerId);
   });
 });

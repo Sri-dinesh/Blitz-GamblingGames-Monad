@@ -78,6 +78,14 @@ const formatDateTime = (seconds: bigint) => {
   return new Date(Number(seconds) * 1000).toLocaleString();
 };
 
+const safeRead = async <T,>(reader: () => Promise<T>, fallback: T): Promise<T> => {
+  try {
+    return await reader();
+  } catch {
+    return fallback;
+  }
+};
+
 export default function Home() {
   const { showError, showInfo, showSuccess } = useToastContext();
 
@@ -195,20 +203,22 @@ export default function Home() {
       const stakingToken = new ethers.Contract(STAKING_TOKEN_ADDRESS, ERC20_ABI, provider);
       const rewardToken = new ethers.Contract(REWARD_TOKEN_ADDRESS, ERC20_ABI, provider);
 
-      const [owner, duration, finishAt, rewardRate, totalSupply, rewardPerToken, stakeTokenSymbol, rewardTokenSymbol, stakeTokenDecimals, rewardTokenDecimals] = await Promise.all([
+      const [owner, duration, finishAt, rewardRate, totalSupply, rewardPerToken] = await Promise.all([
         staking.owner() as Promise<string>,
         staking.duration() as Promise<bigint>,
         staking.finishAt() as Promise<bigint>,
         staking.rewardRate() as Promise<bigint>,
         staking.totalSupply() as Promise<bigint>,
         staking.rewardPerToken() as Promise<bigint>,
-        stakingToken.symbol() as Promise<string>,
-        rewardToken.symbol() as Promise<string>,
-        stakingToken.decimals() as Promise<number>,
-        rewardToken.decimals() as Promise<number>,
       ]);
 
       setContractStats({ owner, duration, finishAt, rewardRate, totalSupply, rewardPerToken });
+      const [stakeTokenSymbol, rewardTokenSymbol, stakeTokenDecimals, rewardTokenDecimals] = await Promise.all([
+        safeRead(() => stakingToken.symbol() as Promise<string>, "STK"),
+        safeRead(() => rewardToken.symbol() as Promise<string>, "RWD"),
+        safeRead(() => stakingToken.decimals() as Promise<number>, 18),
+        safeRead(() => rewardToken.decimals() as Promise<number>, 18),
+      ]);
       setStakingSymbol(stakeTokenSymbol);
       setRewardSymbol(rewardTokenSymbol);
       setStakingDecimals(Number(stakeTokenDecimals));
@@ -216,11 +226,11 @@ export default function Home() {
 
       if (account) {
         const [staked, earned, rewards, stakeWalletBal, rewardWalletBal] = await Promise.all([
-          staking.balanceOf(account) as Promise<bigint>,
-          staking.earned(account) as Promise<bigint>,
-          staking.rewards(account) as Promise<bigint>,
-          stakingToken.balanceOf(account) as Promise<bigint>,
-          rewardToken.balanceOf(account) as Promise<bigint>,
+          safeRead(() => staking.balanceOf(account) as Promise<bigint>, ZERO),
+          safeRead(() => staking.earned(account) as Promise<bigint>, ZERO),
+          safeRead(() => staking.rewards(account) as Promise<bigint>, ZERO),
+          safeRead(() => stakingToken.balanceOf(account) as Promise<bigint>, ZERO),
+          safeRead(() => rewardToken.balanceOf(account) as Promise<bigint>, ZERO),
         ]);
 
         setUserStats({

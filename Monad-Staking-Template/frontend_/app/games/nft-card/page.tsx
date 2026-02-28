@@ -127,6 +127,19 @@ const BACKGROUNDS: BgDef[] = [
 
 const WS_DEFAULT_URL = "ws://localhost:8081";
 const HP_SEGMENTS = 20;
+const ESCROW_ERROR_MAP: Record<string, string> = {
+  "0xe6c4247b": "Invalid address. Opponent wallet cannot be empty or same as creator wallet.",
+  "0x9d749a92": "Invalid stake amount. Ensure stake is valid and matches on both sides.",
+  "0xfc2bc70d": "Match already exists on-chain for this session.",
+  "0xb19089b8": "Match not found on-chain. Creator must create stake first for this session.",
+  "0xde9c2321": "Only the designated opponent wallet can join this match.",
+  "0xbcb105ca": "Match already joined by opponent.",
+  "0xdb084775": "Match is not joined yet.",
+  "0x9f039727": "Match is already finalized.",
+  "0x9cd0e68f": "Match is not finalized yet.",
+  "0x618c7242": "Only the winner wallet can claim pot.",
+  "0x646cf558": "Pot is already claimed.",
+};
 
 const cardById = new Map(CARDS.map((card) => [card.id, card]));
 const bgById = new Map(BACKGROUNDS.map((bg) => [bg.id, bg]));
@@ -134,6 +147,19 @@ const bgById = new Map(BACKGROUNDS.map((bg) => [bg.id, bg]));
 const getHpSegments = (hp: number) => {
   const count = Math.max(0, Math.min(HP_SEGMENTS, Math.ceil(hp / (100 / HP_SEGMENTS))));
   return Array.from({ length: HP_SEGMENTS }, (_, idx) => idx < count);
+};
+
+const extractErrorSelector = (error: unknown): string => {
+  if (!error || typeof error !== "object") return "";
+  const err = error as { data?: unknown; message?: string; info?: { error?: { data?: string } } };
+  const direct = typeof err.data === "string" ? err.data : "";
+  if (direct.startsWith("0x") && direct.length >= 10) return direct.slice(0, 10).toLowerCase();
+  const nested = typeof err.info?.error?.data === "string" ? err.info.error.data : "";
+  if (nested.startsWith("0x") && nested.length >= 10) return nested.slice(0, 10).toLowerCase();
+  const msg = typeof err.message === "string" ? err.message : "";
+  const fromMsg = msg.match(/data=\"(0x[0-9a-fA-F]+)\"/);
+  if (fromMsg?.[1]) return fromMsg[1].slice(0, 10).toLowerCase();
+  return "";
 };
 
 export default function NftCardGamePage() {
@@ -353,6 +379,10 @@ export default function NftCardGamePage() {
       showError("Opponent wallet is missing. Ask opponent to connect wallet.");
       return;
     }
+    if (opponentWalletInSession === normalizedWallet) {
+      showError("Opponent wallet is same as your wallet. Use a different wallet for player 2.");
+      return;
+    }
     if (myWalletInSession !== normalizedWallet) {
       showError("Your connected wallet does not match session wallet.");
       return;
@@ -368,8 +398,8 @@ export default function NftCardGamePage() {
       showSuccess("On-chain match created. Opponent must join with same stake.");
       await refreshEscrowState();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Create stake failed.";
-      showError(message);
+      const selector = extractErrorSelector(error);
+      showError(ESCROW_ERROR_MAP[selector] || (error instanceof Error ? error.message : "Create stake failed."));
     } finally {
       setEscrowBusy("");
     }
@@ -378,6 +408,10 @@ export default function NftCardGamePage() {
   const joinEscrow = async () => {
     if (!session || !matchId || !walletAddress) {
       showError("Connect wallet and session first.");
+      return;
+    }
+    if (!escrow.exists) {
+      showInfo("On-chain stake not created yet. Creator must click Create On-chain Stake first.");
       return;
     }
 
@@ -392,8 +426,8 @@ export default function NftCardGamePage() {
       showSuccess("Joined on-chain match stake.");
       await refreshEscrowState();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Join stake failed.";
-      showError(message);
+      const selector = extractErrorSelector(error);
+      showError(ESCROW_ERROR_MAP[selector] || (error instanceof Error ? error.message : "Join stake failed."));
     } finally {
       setEscrowBusy("");
     }
@@ -417,8 +451,8 @@ export default function NftCardGamePage() {
       showSuccess("Winner vote submitted on-chain.");
       await refreshEscrowState();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Vote winner failed.";
-      showError(message);
+      const selector = extractErrorSelector(error);
+      showError(ESCROW_ERROR_MAP[selector] || (error instanceof Error ? error.message : "Vote winner failed."));
     } finally {
       setEscrowBusy("");
     }
@@ -434,8 +468,8 @@ export default function NftCardGamePage() {
       showSuccess("Pot claimed successfully.");
       await refreshEscrowState();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Claim pot failed.";
-      showError(message);
+      const selector = extractErrorSelector(error);
+      showError(ESCROW_ERROR_MAP[selector] || (error instanceof Error ? error.message : "Claim pot failed."));
     } finally {
       setEscrowBusy("");
     }
@@ -470,10 +504,10 @@ export default function NftCardGamePage() {
   }, [ethereum]);
 
   useEffect(() => {
-    if (!session || !walletAddress) return;
-    if (myWalletInSession === normalizedWallet) return;
+    if (!walletAddress) return;
+    if (session && myWalletInSession === normalizedWallet) return;
     sendEvent({ type: "set_wallet", walletAddress: normalizedWallet });
-  }, [myWalletInSession, normalizedWallet, sendEvent, session, walletAddress]);
+  }, [myWalletInSession, normalizedWallet, sendEvent, session, walletAddress, connected]);
 
   useEffect(() => {
     if (!session || !walletAddress || !matchId) return;
@@ -491,6 +525,9 @@ export default function NftCardGamePage() {
     socket.onopen = () => {
       setConnected(true);
       setStatusText("Connected. Create or join a session.");
+      if (normalizedWallet) {
+        socket.send(JSON.stringify({ type: "set_wallet", walletAddress: normalizedWallet }));
+      }
     };
 
     socket.onclose = () => {
